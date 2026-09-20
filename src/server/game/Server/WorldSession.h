@@ -961,6 +961,12 @@ class TC_GAME_API WorldSession
         uint32 GetClientBuild() const { return _clientBuild; }
         ClientBuild::VariantId const& GetClientBuildVariant() const { return _clientBuildVariant; }
 
+        // Headless (socketless) sessions for automated testing, see scripts/Custom/cs_headless.cpp
+        bool IsHeadless() const { return _headless; }
+        void SetHeadless() { _headless = true; }
+        void RequestHeadlessLogout() { _headlessExit = true; }
+        void HeadlessLogin(ObjectGuid guid);
+
         bool CanAccessAlliedRaces() const;
 
         /// Session in auth.queue currently
@@ -1878,6 +1884,8 @@ class TC_GAME_API WorldSession
         rbac::RBACData* _RBACData;
         uint32 expireTime;
         bool forceExit;
+        bool _headless = false;
+        bool _headlessExit = false;
 
         std::unique_ptr<boost::circular_buffer<std::pair<int64, uint32>>> _timeSyncClockDeltaQueue; // first member: clockDelta. Second member: latency of the packet exchange that was used to compute that clockDelta.
         int64 _timeSyncClockDelta;

@@ -212,6 +212,9 @@ std::string WorldSession::GetPlayerInfo() const
 /// Send a packet to the client
 void WorldSession::SendPacket(WorldPacket const* packet, bool forced /*= false*/)
 {
+    if (_headless)
+        return;
+
     if (!opcodeTable.IsValid(static_cast<OpcodeServer>(packet->GetOpcode())))
     {
         char const* specialName = packet->GetOpcode() == UNKNOWN_OPCODE ? "UNKNOWN_OPCODE" : "INVALID_OPCODE";
@@ -344,7 +347,7 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
     ///- Before we process anything:
     /// If necessary, kick the player because the client didn't send anything for too long
     /// (or they've been idling in character select)
-    if (IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
+    if (m_Socket[CONNECTION_TYPE_REALM] && IsConnectionIdle() && !HasPermission(rbac::RBAC_PERM_IGNORE_IDLE_CONNECTION))
         m_Socket[CONNECTION_TYPE_REALM]->CloseSocket();
 
     ///- Retrieve packets from the receive queue and call the appropriate handlers
@@ -518,6 +521,19 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
         ///- If necessary, log the player out
         if (ShouldLogOut(currentTime) && m_playerLoading.IsEmpty())
             LogoutPlayer(true);
+
+        if (_headless)
+        {
+            if (_headlessExit)
+            {
+                if (_player)
+                    LogoutPlayer(true);
+                return false;                                   // session removed by World::UpdateSessions
+            }
+            if (!_player && m_playerLoading.IsEmpty())
+                return false;                                   // login failed or never requested
+            return true;
+        }
 
         ///- Cleanup socket pointer if need
         if (std::ranges::any_of(m_Socket, [](std::shared_ptr<WorldSocket> const& s) { return s && !s->IsOpen(); }))
@@ -700,6 +716,12 @@ void WorldSession::LogoutPlayer(bool save)
 void WorldSession::KickPlayer(std::string_view reason)
 {
     TC_LOG_INFO("network.kick", "{} kicked with reason: {}", GetPlayerInfo(), reason);
+
+    if (_headless)
+    {
+        _headlessExit = true;
+        return;
+    }
 
     for (std::shared_ptr<WorldSocket> const& socket : m_Socket)
     {
@@ -1633,4 +1655,14 @@ void WorldSession::SendTimeSync()
 void WorldSession::RegisterTimeSync(uint32 counter)
 {
     _pendingTimeSyncRequests[counter] = getMSTime();
+}
+
+void WorldSession::HeadlessLogin(ObjectGuid guid)
+{
+    if (!_headless || _player || !m_playerLoading.IsEmpty())
+        return;
+
+    m_playerLoading = guid;
+    m_playerRecentlyLogout = false;
+    HandleContinuePlayerLogin();
 }
