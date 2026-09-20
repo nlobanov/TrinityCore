@@ -16,6 +16,7 @@
  */
 
 #include "MotionMaster.h"
+#include "EventRecorder.h"
 #include "Creature.h"
 #include "CreatureAISelector.h"
 #include "DB2Stores.h"
@@ -600,6 +601,8 @@ void MotionMaster::MoveChase(Unit* target, Optional<ChaseRange> dist, Optional<C
     // Ignore movement request if target not exist
     if (!target || target == _owner)
         return;
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(_owner, "move_chase", "\"target\":" + EventRecorder::Ref(target));
 
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MoveChase: '{}', starts chasing '{}'", _owner->GetGUID(), target->GetGUID());
     Add(new ChaseMovementGenerator(target, dist, angle));
@@ -650,6 +653,8 @@ void MotionMaster::MovePoint(uint32 id, float x, float y, float z, bool generate
     Optional<MovementFadeObject> fadeObject /*= {}*/,
     Scripting::v2::ActionResultSetter<MovementStopReason>&& scriptResult /*= {}*/)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(_owner, "move_point", Trinity::StringFormat("\"id\":{},\"x\":{:.1f},\"y\":{:.1f},\"z\":{:.1f}", id, x, y, z));
     TC_LOG_DEBUG("movement.motionmaster", "MotionMaster::MovePoint: '{}', targeted point Id: {} (X: {}, Y: {}, Z: {})", _owner->GetGUID(), id, x, y, z);
     Add(new PointMovementGenerator(id, x, y, z, generatePath, speed, finalOrient, nullptr, nullptr, speedSelectionMode, closeEnoughDistance,
         fadeObject, std::move(scriptResult)));
@@ -1111,6 +1116,8 @@ void MotionMaster::MovePath(uint32 pathId, bool repeatable, Optional<Millisecond
     Optional<bool> exactSplinePath /*= {}*/, bool generatePath /*= true*/, Optional<MovementFadeObject> fadeObject /*= {}*/,
     Scripting::v2::ActionResultSetter<MovementStopReason>&& scriptResult /*= {}*/)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(_owner, "move_path", Trinity::StringFormat("\"pathId\":{},\"repeat\":{}", pathId, repeatable));
     if (!pathId)
     {
         if (scriptResult)

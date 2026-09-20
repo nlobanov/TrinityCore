@@ -16,6 +16,7 @@
  */
 
 #include "CreatureTextMgr.h"
+#include "EventRecorder.h"
 #include "CreatureTextMgrImpl.h"
 #include "CellImpl.h"
 #include "Chat.h"
@@ -214,6 +215,8 @@ uint32 CreatureTextMgr::SendChat(Creature* source, uint8 textGroup, WorldObject 
     uint32 finalSound = iter->sound;
     SoundKitPlayType finalPlayType = iter->SoundPlayType;
     BroadcastTextEntry const* bct = sBroadcastTextStore.LookupEntry(iter->BroadcastTextId);
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(source, "text", Trinity::StringFormat("\"group\":{},\"id\":{},\"type\":{},\"broadcastText\":{},\"text\":\"{}\"", uint32(textGroup), uint32(iter->id), uint32(finalType), iter->BroadcastTextId, EventRecorder::Esc(iter->text)));
     if (sound)
     {
         finalSound = sound;

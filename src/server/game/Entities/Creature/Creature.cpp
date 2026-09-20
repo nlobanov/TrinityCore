@@ -16,6 +16,7 @@
  */
 
 #include "Creature.h"
+#include "EventRecorder.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
 #include "CharmInfo.h"
@@ -348,6 +349,8 @@ void Creature::AddToWorld()
     ///- Register the creature for guid lookup
     if (!IsInWorld())
     {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "spawn", Trinity::StringFormat("\"spawnId\":{},\"phase\":{},\"summon\":{}", m_spawnId, GetDBPhase(), IsSummon()));
         GetMap()->GetObjectsStore().Insert<Creature>(this);
         if (m_spawnId)
             GetMap()->GetCreatureBySpawnIdStore().insert(std::make_pair(m_spawnId, this));
@@ -367,6 +370,8 @@ void Creature::RemoveFromWorld()
 {
     if (IsInWorld())
     {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "despawn", "");
         if (GetZoneScript())
             GetZoneScript()->OnCreatureRemove(this);
 
@@ -735,6 +740,9 @@ void Creature::ApplyAllStaticFlags(CreatureStaticFlagsHolder const& flags)
 
 void Creature::Update(uint32 diff)
 {
+    if (IsInCombat() && sEventRecorder->IsEnabled())
+        sEventRecorder->SamplePosition(this);
+
     if (IsAIEnabled() && m_triggerJustAppeared && m_deathState != DEAD)
     {
         if (IsAreaSpiritHealer() && !IsAreaSpiritHealerIndividual())
@@ -2134,6 +2142,8 @@ void Creature::setDeathState(DeathState s)
 
     if (s == JUST_DIED)
     {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "death", "");
         m_corpseRemoveTime = GameTime::GetGameTime() + m_corpseDelay;
 
         uint32 respawnDelay = m_respawnDelay;
@@ -3571,6 +3581,8 @@ bool Creature::IsEngaged() const
 void Creature::AtEngage(Unit* target)
 {
     Unit::AtEngage(target);
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "engage", "\"target\":" + EventRecorder::Ref(target));
 
     _aggroGracePeriodExpired = true;
 
@@ -3614,6 +3626,8 @@ void Creature::AtEngage(Unit* target)
 void Creature::AtDisengage()
 {
     Unit::AtDisengage();
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "disengage", "");
 
     ClearUnitState(UNIT_STATE_ATTACK_PLAYER);
     if (IsAlive() && HasDynamicFlag(UNIT_DYNFLAG_TAPPED))

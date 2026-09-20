@@ -16,6 +16,7 @@
  */
 
 #include "Loot.h"
+#include "EventRecorder.h"
 #include "DB2Stores.h"
 #include "DatabaseEnv.h"
 #include "GameTime.h"
@@ -896,6 +897,14 @@ bool Loot::FillLoot(uint32 lootId, LootStore const& store, Player* lootOwner, bo
     // ... for personal loot
     else
         FillNotNormalLootFor(lootOwner);
+
+    if (sEventRecorder->IsEnabled())
+    {
+        std::string list;
+        for (LootItem const& item : items)
+            list += Trinity::StringFormat("{}[{},{}]", list.empty() ? "" : ",", item.itemid, uint32(item.count));
+        sEventRecorder->Emit(lootOwner, "loot", Trinity::StringFormat("\"lootId\":{},\"gold\":{},\"items\":[{}]", lootId, gold, list));
+    }
 
     return true;
 }

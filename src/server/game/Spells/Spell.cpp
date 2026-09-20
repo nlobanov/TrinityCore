@@ -16,6 +16,7 @@
  */
 
 #include "Spell.h"
+#include "EventRecorder.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -3609,6 +3610,9 @@ void Spell::cancel(SpellCastResult result /*= SPELL_FAILED_INTERRUPTED*/, Option
     if (m_spellState == SPELL_STATE_FINISHED)
         return;
 
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(m_caster, "cast_cancel", Trinity::StringFormat("\"spell\":{},\"result\":{}", m_spellInfo->Id, uint32(result)));
+
     SpellState oldState = m_spellState;
     m_spellState = SPELL_STATE_FINISHED;
 
@@ -4572,6 +4576,8 @@ void Spell::SendSpellStart()
         return;
 
     TC_LOG_DEBUG("spells", "Sending SMSG_SPELL_START id={}", m_spellInfo->Id);
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(m_caster, "cast_start", Trinity::StringFormat("\"spell\":{},\"castTime\":{},\"target\":\"{}\"", m_spellInfo->Id, m_casttime, m_targets.GetUnitTargetGUID().ToString()));
 
     uint32 castFlags = CAST_FLAG_HAS_TRAJECTORY;
     uint32 schoolImmunityMask = 0;
@@ -4676,6 +4682,8 @@ void Spell::SendSpellGo()
         return;
 
     TC_LOG_DEBUG("spells", "Sending SMSG_SPELL_GO id={}", m_spellInfo->Id);
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(m_caster, "cast_go", Trinity::StringFormat("\"spell\":{},\"target\":\"{}\"", m_spellInfo->Id, m_targets.GetUnitTargetGUID().ToString()));
 
     uint32 castFlags = CAST_FLAG_UNKNOWN_9;
 

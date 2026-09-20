@@ -16,6 +16,7 @@
  */
 
 #include "Unit.h"
+#include "EventRecorder.h"
 #include "AbstractFollower.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
@@ -833,6 +834,8 @@ bool Unit::HasBreakableByDamageCrowdControlAura(Unit const* excludeCasterChannel
 
 /*static*/ uint32 Unit::DealDamage(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellSchoolMask damageSchoolMask, SpellInfo const* spellProto, bool durabilityLoss)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(attacker ? static_cast<WorldObject*>(attacker) : static_cast<WorldObject*>(victim), "damage", Trinity::StringFormat("\"victim\":{},\"amount\":{},\"spell\":{},\"school\":{},\"type\":{}", EventRecorder::Ref(victim), damage, spellProto ? spellProto->Id : 0, uint32(damageSchoolMask), uint32(damagetype)));
     uint32 damageDone = damage;
     uint32 damageTaken = damage;
     if (attacker)
@@ -1690,6 +1693,8 @@ void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 
 void Unit::HandleEmoteCommand(Emote emoteId, Player* target /*=nullptr*/, Trinity::IteratorPair<int32 const*> spellVisualKitIds /*= {}*/, int32 sequenceVariation /*= 0*/)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "emote", Trinity::StringFormat("\"emote\":{}", uint32(emoteId)));
     WorldPackets::Chat::Emote packet;
     packet.Guid = GetGUID();
     packet.EmoteID = emoteId;
@@ -3531,6 +3536,8 @@ void Unit::_ApplyAuraEffect(Aura* aura, uint8 effIndex)
 void Unit::_ApplyAura(AuraApplication* aurApp, uint32 effMask)
 {
     Aura* aura = aurApp->GetBase();
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "aura_apply", Trinity::StringFormat("\"spell\":{},\"caster\":\"{}\",\"duration\":{},\"stacks\":{}", aura->GetId(), aura->GetCasterGUID().ToString(), aura->GetDuration(), uint32(aura->GetStackAmount())));
 
     _RemoveNoStackAurasDueToAura(aura, false);
 
@@ -3594,6 +3601,8 @@ void Unit::_UnapplyAura(AuraApplicationMap::iterator& i, AuraRemoveMode removeMo
 
     aurApp->SetRemoveMode(removeMode);
     Aura* aura = aurApp->GetBase();
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "aura_remove", Trinity::StringFormat("\"spell\":{},\"mode\":{}", aura->GetId(), uint32(removeMode)));
     TC_LOG_DEBUG("spells", "Aura {} now is remove mode {}", aura->GetId(), removeMode);
 
     // dead loop is killing the server probably
@@ -6533,6 +6542,8 @@ void Unit::SetCharm(Unit* charm, bool apply)
     Unit* healer = healInfo.GetHealer();
     Unit* victim = healInfo.GetTarget();
     uint32 addhealth = healInfo.GetHeal();
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(healer ? static_cast<WorldObject*>(healer) : static_cast<WorldObject*>(victim), "heal", Trinity::StringFormat("\"victim\":{},\"amount\":{},\"spell\":{}", EventRecorder::Ref(victim), addhealth, healInfo.GetSpellInfo() ? healInfo.GetSpellInfo()->Id : 0));
 
     if (UnitAI* victimAI = victim->GetAI())
         victimAI->HealReceived(healer, addhealth);

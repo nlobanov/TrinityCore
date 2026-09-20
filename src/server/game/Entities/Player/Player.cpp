@@ -16,6 +16,7 @@
  */
 
 #include "Player.h"
+#include "EventRecorder.h"
 #include "AreaTrigger.h"
 #include "AccountMgr.h"
 #include "AchievementMgr.h"
@@ -14019,6 +14020,8 @@ bool Player::CanRewardQuest(Quest const* quest, LootItemType rewardType, uint32 
 
 void Player::AddQuest(Quest const* quest, Object* questGiver)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "quest_accept", Trinity::StringFormat("\"quest\":{},\"giver\":\"{}\"", quest->GetQuestId(), questGiver ? questGiver->GetGUID().ToString() : ""));
     uint16 log_slot = FindQuestSlot(0);
 
     if (log_slot >= MAX_QUEST_LOG_SIZE) // Player does not have any free slot in the quest log
@@ -14123,6 +14126,8 @@ void Player::AddQuest(Quest const* quest, Object* questGiver)
 
 void Player::CompleteQuest(uint32 quest_id)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "quest_complete", Trinity::StringFormat("\"quest\":{}", quest_id));
     if (quest_id)
     {
         SetQuestStatus(quest_id, QUEST_STATUS_COMPLETE);
@@ -14254,6 +14259,8 @@ void Player::RewardQuestPackage(uint32 questPackageId, ItemContext context, uint
 
 void Player::RewardQuest(Quest const* quest, LootItemType rewardType, uint32 rewardId, Object* questGiver, bool announce)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "quest_reward", Trinity::StringFormat("\"quest\":{},\"rewardId\":{},\"giver\":\"{}\"", quest->GetQuestId(), rewardId, questGiver ? questGiver->GetGUID().ToString() : ""));
     //this THING should be here to protect code from quest, which cast on player far teleport as a reward
     //should work fine, cause far teleport will be executed in Player::Update()
     SetCanDelayTeleport(true);
@@ -15835,6 +15842,8 @@ void Player::KilledMonster(Creature const* creature)
 
 void Player::KilledMonsterCredit(uint32 entry, ObjectGuid guid /*= ObjectGuid::Empty*/)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(this, "quest_kill_credit", Trinity::StringFormat("\"entry\":{},\"guid\":\"{}\"", entry, guid.ToString()));
     uint16 addKillCount = 1;
     uint32 real_entry = entry;
     Creature* killed = nullptr;

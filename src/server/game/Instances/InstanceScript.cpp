@@ -16,6 +16,7 @@
  */
 
 #include "InstanceScript.h"
+#include "EventRecorder.h"
 #include "AreaBoundary.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -373,6 +374,8 @@ void InstanceScript::AddMinion(Creature* minion, bool add)
 
 bool InstanceScript::SetBossState(uint32 id, EncounterState state)
 {
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->EmitOnMap(instance, "boss_state", Trinity::StringFormat("\"boss\":{},\"state\":{}", id, uint32(state)));
     if (id < bosses.size())
     {
         BossInfo* bossInfo = &bosses[id];

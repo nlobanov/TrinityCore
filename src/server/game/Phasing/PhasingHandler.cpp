@@ -16,6 +16,7 @@
  */
 
 #include "PhasingHandler.h"
+#include "EventRecorder.h"
 #include "Chat.h"
 #include "ConditionMgr.h"
 #include "Creature.h"
@@ -503,6 +504,14 @@ void PhasingHandler::SendToPlayer(Player const* player, PhaseShift const& phaseS
         [](PhaseShift::UiMapPhaseIdContainer::value_type const& uiWorldMapAreaIdSwap) { return uiWorldMapAreaIdSwap.first; });
 
     player->SendDirectMessage(phaseShiftChange.Write());
+
+    if (sEventRecorder->IsEnabled())
+    {
+        std::string phases;
+        for (PhaseShift::PhaseRef const& phase : phaseShift.Phases)
+            phases += (phases.empty() ? "" : ",") + std::to_string(phase.Id);
+        sEventRecorder->Emit(player, "phase", "\"phases\":[" + phases + "]");
+    }
 }
 
 void PhasingHandler::SendToPlayer(Player const* player)
