@@ -11,6 +11,7 @@
  * .headless select entry <character> <entry>     set the character's target to the nearest creature with this entry
  * .headless attack <character>           start melee attacking the current target
  * .headless loot <character>             list the loot the character sees on its selected creature
+ * .headless stats <character>            dump the character sheet (stats, ratings, spell power, crit, haste, mastery, equipment)
  * .headless unreward <character> <quest> forget a quest completely (active and rewarded), re-evaluate phases
  * .headless phaseupdate <character>      re-evaluate phase conditions and print current phases
  * .headless cast <character> <spell> [triggered]   cast on the selected target (or self) and report SpellCastResult
@@ -28,12 +29,15 @@
 #include "PhasingHandler.h"
 #include "SpellDefines.h"
 #include "SpellMgr.h"
+#include "StringFormat.h"
 #include "RealmList.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Creature.h"
+#include "Item.h"
+#include "ItemTemplate.h"
 #include "Loot.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
@@ -105,6 +109,7 @@ public:
             { "select", selectCommandTable },
             { "attack", HandleHeadlessAttack, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "loot",   HandleHeadlessLoot,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "stats",  HandleHeadlessStats,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "unreward", HandleHeadlessUnreward, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "phaseupdate", HandleHeadlessPhaseUpdate, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "cast",   HandleHeadlessCast,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
@@ -423,6 +428,36 @@ public:
             name.c_str(), spellId, target->GetName().c_str(), uint32(result), result == SPELL_CAST_OK ? "ok" : "failed",
             player->GetDistance(target), uint32(player->HasInArc(float(M_PI), target)), uint32(player->IsAlive()), uint32(player->IsInCombat()));
         return result == SPELL_CAST_OK;
+    }
+
+    static bool HandleHeadlessStats(ChatHandler* handler, std::string name)
+    {
+        Player* p = FindHeadlessPlayer(handler, name);
+        if (!p)
+            return false;
+
+        handler->PSendSysMessage("stats %s level %u class %u race %u talentgroup %u", p->GetName().c_str(), uint32(p->GetLevel()), uint32(p->GetClass()), uint32(p->GetRace()), uint32(p->GetActiveTalentGroup()));
+        handler->PSendSysMessage("  str %.0f agi %.0f sta %.0f int %.0f spi %.0f", p->GetStat(STAT_STRENGTH), p->GetStat(STAT_AGILITY), p->GetStat(STAT_STAMINA), p->GetStat(STAT_INTELLECT), p->GetStat(STAT_SPIRIT));
+        handler->PSendSysMessage("  hp %u mana %d armor %u", uint32(p->GetMaxHealth()), p->GetMaxPower(POWER_MANA), p->GetArmor());
+        handler->PSendSysMessage("  spellpower base %u fire %d frost %d arcane %d nature %d shadow %d holy %d healing %d", p->GetBaseSpellPowerBonus(),
+            p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FIRE), p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_FROST), p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_ARCANE),
+            p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_NATURE), p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_SHADOW), p->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_HOLY), int32(p->m_activePlayerData->ModHealingDonePos));
+        handler->PSendSysMessage("  attackpower melee %.0f ranged %.0f", p->GetTotalAttackPowerValue(BASE_ATTACK), p->GetTotalAttackPowerValue(RANGED_ATTACK));
+        handler->PSendSysMessage("  crit melee %.2f ranged %.2f spell(fire) %.2f spell(frost) %.2f spell(arcane) %.2f", float(p->m_activePlayerData->CritPercentage), float(p->m_activePlayerData->RangedCritPercentage),
+            float(p->m_activePlayerData->SpellCritPercentage[SPELL_SCHOOL_FIRE]), float(p->m_activePlayerData->SpellCritPercentage[SPELL_SCHOOL_FROST]), float(p->m_activePlayerData->SpellCritPercentage[SPELL_SCHOOL_ARCANE]));
+        handler->PSendSysMessage("  haste mod melee %.4f spell %.4f ranged %.4f mastery %.2f dodge %.2f parry %.2f block %.2f", float(p->m_unitData->ModHaste), float(p->m_unitData->ModSpellHaste), float(p->m_unitData->ModRangedHaste),
+            float(p->m_activePlayerData->Mastery), float(p->m_activePlayerData->DodgePercentage), float(p->m_activePlayerData->ParryPercentage), float(p->m_activePlayerData->BlockPercentage));
+        handler->PSendSysMessage("  ratings hit(melee/ranged/spell) %d/%d/%d crit(melee/ranged/spell) %d/%d/%d haste(melee/ranged/spell) %d/%d/%d expertise %d mastery %d",
+            int32(p->m_activePlayerData->CombatRatings[CR_HIT_MELEE]), int32(p->m_activePlayerData->CombatRatings[CR_HIT_RANGED]), int32(p->m_activePlayerData->CombatRatings[CR_HIT_SPELL]),
+            int32(p->m_activePlayerData->CombatRatings[CR_CRIT_MELEE]), int32(p->m_activePlayerData->CombatRatings[CR_CRIT_RANGED]), int32(p->m_activePlayerData->CombatRatings[CR_CRIT_SPELL]),
+            int32(p->m_activePlayerData->CombatRatings[CR_HASTE_MELEE]), int32(p->m_activePlayerData->CombatRatings[CR_HASTE_RANGED]), int32(p->m_activePlayerData->CombatRatings[CR_HASTE_SPELL]),
+            int32(p->m_activePlayerData->CombatRatings[CR_EXPERTISE]), int32(p->m_activePlayerData->CombatRatings[CR_MASTERY]));
+        std::string equip;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* item = p->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                equip += Trinity::StringFormat("{}{}:{}", equip.empty() ? "" : " ", uint32(slot), item->GetTemplate()->GetId());
+        handler->PSendSysMessage("  equipment %s", equip.empty() ? "(none)" : equip.c_str());
+        return true;
     }
 
     static bool HandleHeadlessStop(ChatHandler* handler, std::string name)
