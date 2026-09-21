@@ -802,6 +802,9 @@ public:
             }
         }
 
+        // passive talent auras update their own stats on apply; the sheet as a whole (crit, haste, mastery, power) is refreshed once here
+        player->UpdateAllStats();
+
         handler->PSendSysMessage("Headless: '%s' talents: %u ranks learned, %u talents failed%s; primary tree %u, points left %d, mastery spell %u known %u, CanUseMastery %u.",
             name.c_str(), learned, failed, failedList.c_str(), player->GetPrimaryTalentTree(), int32(player->m_activePlayerData->CharacterPoints),
             masterySpell, uint32(player->HasSpell(masterySpell)), uint32(player->CanUseMastery()));

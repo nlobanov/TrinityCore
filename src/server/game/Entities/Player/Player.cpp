@@ -13020,6 +13020,34 @@ void Player::ApplyReforgedStats(Item* item, bool apply)
         return 0.0f;
     }();
 
+    // Stats granted by a random suffix ("of the Fireflash") live in the PROP enchantment slots, scaled by the
+    // item's property seed, and are reforgeable exactly like template stats (the reforger shows them and
+    // WoWSims presets rely on it). Same amount formula as Player::ApplyEnchantment.
+    if (ItemRandomSuffixEntry const* suffix = item->m_itemData->RandomPropertiesID < 0 ? sItemRandomSuffixStore.LookupEntry(std::abs(item->m_itemData->RandomPropertiesID)) : nullptr)
+    {
+        for (uint8 slot = PROP_ENCHANTMENT_SLOT_0; slot <= PROP_ENCHANTMENT_SLOT_4; ++slot)
+        {
+            uint32 enchantId = item->GetEnchantmentId(EnchantmentSlot(slot));
+            SpellItemEnchantmentEntry const* enchant = enchantId ? sSpellItemEnchantmentStore.LookupEntry(enchantId) : nullptr;
+            if (!enchant)
+                continue;
+            for (uint8 s = 0; s < MAX_ITEM_ENCHANTMENT_EFFECTS; ++s)
+            {
+                if (enchant->Effect[s] != ITEM_ENCHANTMENT_TYPE_STAT || enchant->EffectArg[s] != itemReforge->SourceStat)
+                    continue;
+                int32 amount = enchant->EffectPointsMin[s];
+                if (amount == 0)
+                    for (size_t i = 0; i < suffix->Enchantment.size(); ++i)
+                        if (suffix->Enchantment[i] == static_cast<int32>(enchantId))
+                        {
+                            amount = suffix->AllocationPct[i] * item->m_itemData->PropertySeed / 10000;
+                            break;
+                        }
+                sourceValue += float(std::max(amount, 1));
+            }
+        }
+    }
+
     if (sourceValue == 0.0f)
         return;
 

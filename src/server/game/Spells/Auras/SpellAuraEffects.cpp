@@ -4323,7 +4323,13 @@ void AuraEffect::HandleModSpellCritChance(AuraApplication const* aurApp, uint8 m
     Unit* target = aurApp->GetTarget();
 
     if (target->GetTypeId() == TYPEID_PLAYER)
+    {
+        // SPELL_AURA_MOD_SPELL_CRIT_CHANCE is read in Player::UpdateSpellCritChance; the melee/ranged update alone left
+        // ActivePlayerData::SpellCritPercentage stale until the next full stat update (e.g. relog). Talents such as
+        // Piercing Ice and raid buffs are applied while online, so both must be refreshed here.
         target->ToPlayer()->UpdateAllCritPercentages();
+        target->ToPlayer()->UpdateAllSpellCritChances();
+    }
     else
         target->m_baseSpellCritChance += apply ? GetAmount() : -GetAmount();
 }
@@ -4343,8 +4349,9 @@ void AuraEffect::HandleAuraModCritPct(AuraApplication const* aurApp, uint8 mode,
 
     target->ToPlayer()->UpdateAllWeaponDependentCritAuras();
 
-    // included in Player::UpdateSpellCritChance calculation
+    // included in Player::UpdateSpellCritChance calculation, so refresh the spell side too
     target->ToPlayer()->UpdateAllCritPercentages();
+    target->ToPlayer()->UpdateAllSpellCritChances();
 }
 
 void AuraEffect::HandleModSpellCritChanceSchool(AuraApplication const* aurApp, uint8 mode, bool /*apply*/) const
