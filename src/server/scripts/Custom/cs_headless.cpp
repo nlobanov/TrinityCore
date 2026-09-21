@@ -11,7 +11,9 @@
  * .headless select entry <character> <entry>     set the character's target to the nearest creature with this entry
  * .headless attack <character>           start melee attacking the current target
  * .headless loot <character>             list the loot the character sees on its selected creature
- * .headless unreward <character> <quest> forget a rewarded quest (quest history cleanup for phase tests)
+ * .headless unreward <character> <quest> forget a quest completely (active and rewarded), re-evaluate phases
+ * .headless phaseupdate <character>      re-evaluate phase conditions and print current phases
+ * .headless cast <character> <spell> [triggered]   cast on the selected target (or self) and report SpellCastResult
  * .headless stop <character>             stop attacking
  *
  * One headless character per game account: World::AddSession replaces an existing session of the same account.
@@ -23,6 +25,9 @@
 #include "DatabaseEnv.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
+#include "PhasingHandler.h"
+#include "SpellDefines.h"
+#include "SpellMgr.h"
 #include "RealmList.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
@@ -101,6 +106,8 @@ public:
             { "attack", HandleHeadlessAttack, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "loot",   HandleHeadlessLoot,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "unreward", HandleHeadlessUnreward, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "phaseupdate", HandleHeadlessPhaseUpdate, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "cast",   HandleHeadlessCast,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "stop",   HandleHeadlessStop,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
         };
         static ChatCommandTable commandTable =
@@ -376,11 +383,46 @@ public:
             return false;
         }
         bool wasRewarded = player->IsQuestRewarded(questId);
-        player->RemoveRewardedQuest(questId);
+        uint32 wasStatus = uint32(player->GetQuestStatus(questId));
         player->RemoveActiveQuest(questId);
+        player->RemoveRewardedQuest(questId);
+        PhasingHandler::OnConditionChange(player);
         player->SaveToDB();
-        handler->PSendSysMessage("Headless: quest %u forgotten for '%s' (was rewarded: %u).", questId, name.c_str(), uint32(wasRewarded));
+        handler->PSendSysMessage("Headless: quest %u forgotten for '%s' (was rewarded %u, status %u -> rewarded %u, status %u).", questId, name.c_str(),
+            uint32(wasRewarded), wasStatus, uint32(player->IsQuestRewarded(questId)), uint32(player->GetQuestStatus(questId)));
         return true;
+    }
+
+    static bool HandleHeadlessPhaseUpdate(ChatHandler* handler, std::string name)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        PhasingHandler::OnConditionChange(player);
+        handler->PSendSysMessage("Headless: phases of '%s' re-evaluated: %s", name.c_str(), PhasingHandler::FormatPhases(player->GetPhaseShift()).c_str());
+        return true;
+    }
+
+    static bool HandleHeadlessCast(ChatHandler* handler, std::string name, uint32 spellId, Optional<bool> triggered)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        if (!sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+        {
+            handler->PSendSysMessage("Headless: spell %u does not exist.", spellId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Unit* target = ObjectAccessor::GetUnit(*player, player->GetTarget());
+        if (!target)
+            target = player;
+        CastSpellExtraArgs args(triggered.value_or(false) ? TRIGGERED_FULL_MASK : TRIGGERED_NONE);
+        SpellCastResult result = player->CastSpell(target, spellId, args);
+        handler->PSendSysMessage("Headless: '%s' cast %u on %s -> SpellCastResult %u (%s), distance %.1f, facing %u, alive %u, in combat %u.",
+            name.c_str(), spellId, target->GetName().c_str(), uint32(result), result == SPELL_CAST_OK ? "ok" : "failed",
+            player->GetDistance(target), uint32(player->HasInArc(float(M_PI), target)), uint32(player->IsAlive()), uint32(player->IsInCombat()));
+        return result == SPELL_CAST_OK;
     }
 
     static bool HandleHeadlessStop(ChatHandler* handler, std::string name)
