@@ -1009,7 +1009,8 @@ void WorldSession::HandlePlayerLogin(LoginQueryHolder const& holder)
         return;
     }
 
-    if (!_timeSyncClockDeltaQueue->empty())
+    // headless sessions never answer time sync; without this flag Player::CanNeverSee() hides the whole world from them
+    if (!_timeSyncClockDeltaQueue->empty() || IsHeadless())
     {
         pCurrChar->SetPlayerLocalFlag(PLAYER_LOCAL_FLAG_OVERRIDE_TRANSPORT_SERVER_TIME);
         pCurrChar->SetTransportServerTime(_timeSyncClockDelta);
