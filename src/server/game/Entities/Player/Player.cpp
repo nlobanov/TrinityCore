@@ -1306,7 +1306,7 @@ bool Player::TeleportTo(TeleportLocation const& teleportLocation, TeleportToOpti
 
         // code for finish transfer called in WorldSession::HandleMovementOpcodes()
         // at client packet CMSG_MOVE_TELEPORT_ACK
-        SetTeleportState(GetPlayerMovingMe() ? TeleportState::WaitingForTeleportAck : TeleportState::NotTeleporting);
+        SetTeleportState(GetPlayerMovingMe() && !GetSession()->IsHeadless() ? TeleportState::WaitingForTeleportAck : TeleportState::NotTeleporting);
         // near teleport, triggering send CMSG_MOVE_TELEPORT_ACK from client at landing
         if (!GetSession()->PlayerLogout())
             SendTeleportPacket(m_teleport_dest);

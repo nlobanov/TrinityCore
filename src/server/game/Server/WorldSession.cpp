@@ -530,6 +530,9 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
                     LogoutPlayer(true);
                 return false;                                   // session removed by World::UpdateSessions
             }
+            // no client will answer SMSG_SUSPEND_TOKEN / SMSG_NEW_WORLD: complete far teleports here, outside map updates
+            if (_player && (_player->GetTeleportState() == TeleportState::WaitingForSuspendTokenResponse || _player->GetTeleportState() == TeleportState::WaitingForWorldPortAck))
+                HandleMoveWorldportAck();
             if (!_player && m_playerLoading.IsEmpty())
                 return false;                                   // login failed or never requested
             return true;

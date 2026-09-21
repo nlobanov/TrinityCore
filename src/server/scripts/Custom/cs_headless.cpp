@@ -2,6 +2,7 @@
  * Headless test players: socketless WorldSessions driven through GM commands (SOAP/console).
  * Part of the cata-solo fork. GPL-2.0 like the rest of TrinityCore.
  *
+ * .headless create <account> <name> <raceId> <classId> [genderId]   create a character on an account (default look, no client)
  * .headless login <character>            log a character into the world without a client
  * .headless logout <character>           save and remove a headless character
  * .headless list                         list headless characters
@@ -16,6 +17,11 @@
 
 #include "ScriptMgr.h"
 #include "AccountMgr.h"
+#include "CharacterPackets.h"
+#include "DatabaseEnv.h"
+#include "MotionMaster.h"
+#include "ObjectMgr.h"
+#include "RealmList.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
 #include "Chat.h"
@@ -83,6 +89,7 @@ public:
         };
         static ChatCommandTable headlessCommandTable =
         {
+            { "create", HandleHeadlessCreate, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "login",  HandleHeadlessLogin,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "logout", HandleHeadlessLogout, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "list",   HandleHeadlessList,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
@@ -96,6 +103,82 @@ public:
             { "headless", headlessCommandTable },
         };
         return commandTable;
+    }
+
+    static bool HandleHeadlessCreate(ChatHandler* handler, std::string accountName, std::string charName, uint8 race, uint8 playerClass, Optional<uint8> gender)
+    {
+        uint32 accountId = AccountMgr::GetId(accountName);
+        if (!accountId)
+        {
+            handler->PSendSysMessage("Headless: account '%s' does not exist.", accountName.c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (!normalizePlayerName(charName) || ObjectMgr::CheckPlayerName(charName, LOCALE_enUS, true) != CHAR_NAME_SUCCESS)
+        {
+            handler->PSendSysMessage("Headless: name '%s' is not valid.", charName.c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (sCharacterCache->GetCharacterCacheByName(charName))
+        {
+            handler->PSendSysMessage("Headless: name '%s' is already in use.", charName.c_str());
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::string sessionAccountName = accountName;
+        uint32 bnetAccountId = Battlenet::AccountMgr::GetIdByGameAccount(accountId);
+        std::unique_ptr<WorldSession> session = std::make_unique<WorldSession>(accountId, std::move(sessionAccountName), bnetAccountId, nullptr, SEC_ADMINISTRATOR,
+            uint8(sWorld->getIntConfig(CONFIG_EXPANSION)), 0, "Win", Minutes(0), 0, ClientBuild::VariantId{}, LOCALE_enUS, 0, false);
+        session->SetHeadless();
+
+        WorldPackets::Character::CharacterCreateInfo createInfo;
+        createInfo.Race = race;
+        createInfo.Class = playerClass;
+        createInfo.Sex = gender.value_or(GENDER_MALE);
+        createInfo.Name = charName;
+
+        ObjectGuid guid;
+        {
+            std::shared_ptr<Player> newChar(new Player(session.get()), [](Player* ptr)
+            {
+                ptr->CleanupsBeforeDelete();
+                delete ptr;
+            });
+            newChar->GetMotionMaster()->Initialize();
+            if (!newChar->Create(sObjectMgr->GetGenerator<HighGuid::Player>().Generate(), &createInfo))
+            {
+                handler->PSendSysMessage("Headless: Player::Create failed for race %u class %u (invalid combination?).", uint32(race), uint32(playerClass));
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            newChar->setCinematic(1);
+            newChar->SetAtLoginFlag(AT_LOGIN_FIRST);
+
+            uint32 charCount = 0;
+            if (QueryResult countResult = CharacterDatabase.PQuery("SELECT COUNT(guid) FROM characters WHERE account = {}", accountId))
+                charCount = uint32((*countResult)[0].GetUInt64());
+
+            CharacterDatabaseTransaction characterTransaction = CharacterDatabase.BeginTransaction();
+            LoginDatabaseTransaction loginTransaction = LoginDatabase.BeginTransaction();
+            newChar->SaveToDB(loginTransaction, characterTransaction, true);
+
+            LoginDatabasePreparedStatement* stmt = LoginDatabase.GetPreparedStatement(LOGIN_REP_REALM_CHARACTERS);
+            stmt->setUInt32(0, charCount + 1);
+            stmt->setUInt32(1, accountId);
+            stmt->setUInt32(2, sRealmList->GetCurrentRealmId().Realm);
+            loginTransaction->Append(stmt);
+
+            CharacterDatabase.DirectCommitTransaction(characterTransaction);
+            LoginDatabase.DirectCommitTransaction(loginTransaction);
+
+            guid = newChar->GetGUID();
+            sCharacterCache->AddCharacterCacheEntry(guid, accountId, newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel(), false);
+        }
+
+        handler->PSendSysMessage("Headless: created '%s' (%s) on account %u, race %u class %u.", charName.c_str(), guid.ToString().c_str(), accountId, uint32(race), uint32(playerClass));
+        return true;
     }
 
     static bool HandleHeadlessLogin(ChatHandler* handler, std::string name)

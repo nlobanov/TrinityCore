@@ -11195,6 +11195,9 @@ void Unit::SetMeleeAnimKitId(uint16 animKitId)
             if (Player* tapper = ObjectAccessor::GetPlayer(*creature, tapperGuid))
                 tappers.push_back(tapper);
 
+        if (tappers.empty()) // all tappers left the map (e.g. mid-teleport): nothing to reward, avoid tappers[0] on an empty vector
+            isRewardAllowed = false;
+
         if (!creature->CanHaveLoot())
             isRewardAllowed = false;
     }
