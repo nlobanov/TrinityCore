@@ -12,6 +12,9 @@
  * .headless attack <character>           start melee attacking the current target
  * .headless loot <character>             list the loot the character sees on its selected creature
  * .headless stats <character>            dump the character sheet (stats, ratings, spell power, crit, haste, mastery, equipment)
+ * .headless equip <character> <itemId>   equip an item from the bags (adds it first if the character has none)
+ * .headless unequip <character> <slot|all>  destroy the equipped item in slot (0..18) or all
+ * .headless select none <character>      clear the selection
  * .headless unreward <character> <quest> forget a quest completely (active and rewarded), re-evaluate phases
  * .headless phaseupdate <character>      re-evaluate phase conditions and print current phases
  * .headless cast <character> <spell> [triggered]   cast on the selected target (or self) and report SpellCastResult
@@ -30,6 +33,7 @@
 #include "SpellDefines.h"
 #include "SpellMgr.h"
 #include "StringFormat.h"
+#include "StringConvert.h"
 #include "RealmList.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
@@ -97,6 +101,7 @@ public:
         static ChatCommandTable selectCommandTable =
         {
             { "spawn", HandleHeadlessSelectSpawn, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "none",  HandleHeadlessSelectNone,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "entry", HandleHeadlessSelectEntry, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
         };
         static ChatCommandTable headlessCommandTable =
@@ -110,6 +115,8 @@ public:
             { "attack", HandleHeadlessAttack, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "loot",   HandleHeadlessLoot,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "stats",  HandleHeadlessStats,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "equip",  HandleHeadlessEquip,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "unequip", HandleHeadlessUnequip, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "unreward", HandleHeadlessUnreward, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "phaseupdate", HandleHeadlessPhaseUpdate, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "cast",   HandleHeadlessCast,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
@@ -457,6 +464,99 @@ public:
             if (Item* item = p->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
                 equip += Trinity::StringFormat("{}{}:{}", equip.empty() ? "" : " ", uint32(slot), item->GetTemplate()->GetId());
         handler->PSendSysMessage("  equipment %s", equip.empty() ? "(none)" : equip.c_str());
+        return true;
+    }
+
+    static bool HandleHeadlessSelectNone(ChatHandler* handler, std::string name)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        player->SetSelection(ObjectGuid::Empty);
+        handler->PSendSysMessage("Headless: '%s' selection cleared.", name.c_str());
+        return true;
+    }
+
+    static bool HandleHeadlessEquip(ChatHandler* handler, std::string name, uint32 itemId)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        if (!sObjectMgr->GetItemTemplate(itemId))
+        {
+            handler->PSendSysMessage("Headless: item %u does not exist.", itemId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Item* item = player->GetItemByEntry(itemId, ItemSearchLocation::Inventory);
+        if (!item)
+        {
+            ItemPosCountVec dest;
+            if (player->CanStoreNewItem(NULL_BAG, NULL_SLOT, dest, itemId, 1) != EQUIP_ERR_OK)
+            {
+                handler->PSendSysMessage("Headless: cannot add item %u (bags full?).", itemId);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            item = player->StoreNewItem(dest, itemId, true, GenerateItemRandomBonusListId(itemId));
+            if (!item)
+            {
+                handler->PSendSysMessage("Headless: StoreNewItem failed for %u.", itemId);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+        }
+        uint16 equipDest = 0;
+        InventoryResult res = player->CanEquipItem(NULL_SLOT, equipDest, item, true);
+        if (res != EQUIP_ERR_OK)
+        {
+            handler->PSendSysMessage("Headless: cannot equip item %u, InventoryResult %u.", itemId, uint32(res));
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        // unequip whatever sits in the destination slot first (destroy: test characters only)
+        uint8 slot = equipDest & 255;
+        if (Item* old = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+            if (old != item)
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        player->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
+        Item* equipped = player->EquipItem(equipDest, item, true);
+        player->AutoUnequipOffhandIfNeed();
+        handler->PSendSysMessage("Headless: '%s' equipped %u in slot %u -> %s.", name.c_str(), itemId, uint32(slot), equipped ? "ok" : "failed");
+        return equipped != nullptr;
+    }
+
+    static bool HandleHeadlessUnequip(ChatHandler* handler, std::string name, std::string slotArg)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        uint32 count = 0;
+        if (slotArg == "all")
+        {
+            for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+                if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                {
+                    player->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+                    ++count;
+                }
+        }
+        else
+        {
+            Optional<uint32> slot = Trinity::StringTo<uint32>(slotArg);
+            if (!slot || *slot >= EQUIPMENT_SLOT_END)
+            {
+                handler->SendSysMessage("Headless: slot must be 0..18 or 'all'.");
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            if (player->GetItemByPos(INVENTORY_SLOT_BAG_0, uint8(*slot)))
+            {
+                player->DestroyItem(INVENTORY_SLOT_BAG_0, uint8(*slot), true);
+                ++count;
+            }
+        }
+        handler->PSendSysMessage("Headless: '%s' unequipped (destroyed) %u item(s).", name.c_str(), count);
         return true;
     }
 

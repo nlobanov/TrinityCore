@@ -1327,6 +1327,8 @@ void Unit::DealSpellDamage(SpellNonMeleeDamage const* damageInfo, bool durabilit
         return;
 
     Unit* victim = damageInfo->target;
+    if (victim && sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(damageInfo->attacker ? static_cast<WorldObject*>(damageInfo->attacker) : static_cast<WorldObject*>(victim), "spell_damage", Trinity::StringFormat("\"victim\":{},\"spell\":{},\"amount\":{},\"absorb\":{},\"resist\":{},\"blocked\":{},\"crit\":{},\"periodic\":{},\"school\":{}", EventRecorder::Ref(victim), damageInfo->Spell ? damageInfo->Spell->Id : 0, damageInfo->damage, damageInfo->absorb, damageInfo->resist, damageInfo->blocked, bool(damageInfo->HitInfo & SPELL_HIT_TYPE_CRIT), damageInfo->periodicLog, damageInfo->schoolMask));
     if (!victim)
         return;
 
@@ -1566,6 +1568,8 @@ void Unit::CalculateMeleeDamage(Unit* victim, CalcDamageInfo* damageInfo, Weapon
 void Unit::DealMeleeDamage(CalcDamageInfo* damageInfo, bool durabilityLoss)
 {
     Unit* victim = damageInfo->Target;
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(damageInfo->Attacker ? static_cast<WorldObject*>(damageInfo->Attacker) : static_cast<WorldObject*>(victim), "melee_damage", Trinity::StringFormat("\"victim\":{},\"amount\":{},\"absorb\":{},\"resist\":{},\"blocked\":{},\"crit\":{},\"hitInfo\":{},\"school\":{}", EventRecorder::Ref(victim), damageInfo->Damage, damageInfo->Absorb, damageInfo->Resist, damageInfo->Blocked, bool(damageInfo->HitInfo & HITINFO_CRITICALHIT), damageInfo->HitInfo, damageInfo->DamageSchoolMask));
 
     if (!victim->IsAlive() || victim->HasUnitState(UNIT_STATE_IN_FLIGHT) || (victim->GetTypeId() == TYPEID_UNIT && victim->ToCreature()->IsEvadingAttacks()))
         return;

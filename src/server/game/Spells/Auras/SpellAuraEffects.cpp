@@ -16,6 +16,7 @@
  */
 
 #include "SpellAuraEffects.h"
+#include "EventRecorder.h"
 #include "Battlefield.h"
 #include "BattlefieldMgr.h"
 #include "Battleground.h"
@@ -5637,6 +5638,8 @@ void AuraEffect::HandlePeriodicDamageAurasTick(Unit* target, Unit* caster) const
         overkill = 0;
 
     SpellPeriodicAuraLogInfo pInfo(this, damage, dmg, overkill, absorb, resist, 0.0f, crit);
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(caster ? static_cast<WorldObject*>(caster) : static_cast<WorldObject*>(target), "periodic_damage", Trinity::StringFormat("\"victim\":{},\"spell\":{},\"amount\":{},\"absorb\":{},\"resist\":{},\"crit\":{}", EventRecorder::Ref(target), GetId(), damage, absorb, resist, crit));
 
     Unit::DealDamage(caster, target, damage, &cleanDamage, DOT, GetSpellInfo()->GetSchoolMask(), GetSpellInfo(), true);
 
