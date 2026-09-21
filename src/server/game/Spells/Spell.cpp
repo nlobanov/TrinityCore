@@ -2754,6 +2754,10 @@ void Spell::TargetInfo::PreprocessTarget(Spell* spell)
     else if (MissCondition == SPELL_MISS_REFLECT && ReflectResult == SPELL_MISS_NONE)
         _spellHitTarget = spell->m_caster->ToUnit();
 
+    // Testing: a miss/resist/dodge/parry/immune leaves no damage event, record it explicitly (miss = SpellMissInfo)
+    if (MissCondition != SPELL_MISS_NONE && sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(spell->m_caster, "spell_miss", Trinity::StringFormat("\"victim\":{},\"spell\":{},\"miss\":{},\"reflect\":{}", EventRecorder::Ref(unit), spell->m_spellInfo->Id, uint32(MissCondition), uint32(ReflectResult)));
+
     if (spell->m_originalCaster && MissCondition != SPELL_MISS_EVADE && !spell->m_originalCaster->IsFriendlyTo(unit) && (!spell->m_spellInfo->IsPositive() || spell->m_spellInfo->HasEffect(SPELL_EFFECT_DISPEL)) && (spell->m_spellInfo->HasInitialAggro() || unit->IsEngaged()))
         unit->SetInCombatWith(spell->m_originalCaster);
 
@@ -4572,12 +4576,14 @@ void Spell::SendMountResult(MountResult result)
 
 void Spell::SendSpellStart()
 {
+    // Testing: recorded before the client-visibility check so that triggered/instant casts leave a trace too
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(m_caster, "cast_start", Trinity::StringFormat("\"spell\":{},\"castTime\":{},\"target\":\"{}\",\"triggered\":{}", m_spellInfo->Id, m_casttime, m_targets.GetUnitTargetGUID().ToString(), uint32((_triggeredCastFlags & TRIGGERED_IS_TRIGGERED_MASK) != 0)));
+
     if (!IsNeedSendToClient())
         return;
 
     TC_LOG_DEBUG("spells", "Sending SMSG_SPELL_START id={}", m_spellInfo->Id);
-    if (sEventRecorder->IsEnabled())
-        sEventRecorder->Emit(m_caster, "cast_start", Trinity::StringFormat("\"spell\":{},\"castTime\":{},\"target\":\"{}\"", m_spellInfo->Id, m_casttime, m_targets.GetUnitTargetGUID().ToString()));
 
     uint32 castFlags = CAST_FLAG_HAS_TRAJECTORY;
     uint32 schoolImmunityMask = 0;
@@ -4677,13 +4683,15 @@ void Spell::SendSpellStart()
 
 void Spell::SendSpellGo()
 {
+    // Testing: recorded before the client-visibility check so that triggered/instant casts leave a trace too
+    if (sEventRecorder->IsEnabled())
+        sEventRecorder->Emit(m_caster, "cast_go", Trinity::StringFormat("\"spell\":{},\"target\":\"{}\",\"triggered\":{}", m_spellInfo->Id, m_targets.GetUnitTargetGUID().ToString(), uint32((_triggeredCastFlags & TRIGGERED_IS_TRIGGERED_MASK) != 0)));
+
     // not send invisible spell casting
     if (!IsNeedSendToClient())
         return;
 
     TC_LOG_DEBUG("spells", "Sending SMSG_SPELL_GO id={}", m_spellInfo->Id);
-    if (sEventRecorder->IsEnabled())
-        sEventRecorder->Emit(m_caster, "cast_go", Trinity::StringFormat("\"spell\":{},\"target\":\"{}\"", m_spellInfo->Id, m_targets.GetUnitTargetGUID().ToString()));
 
     uint32 castFlags = CAST_FLAG_UNKNOWN_9;
 

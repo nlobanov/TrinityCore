@@ -12,8 +12,16 @@
  * .headless attack <character>           start melee attacking the current target
  * .headless loot <character>             list the loot the character sees on its selected creature
  * .headless stats <character>            dump the character sheet (stats, ratings, spell power, crit, haste, mastery, equipment)
- * .headless equip <character> <itemId>   equip an item from the bags (adds it first if the character has none)
+ * .headless equip <character> <itemId> [randomPropertiesId]   equip an item (adds it first if the character has none);
+ *                                        randomPropertiesId > 0 = ItemRandomProperties, < 0 = -ItemRandomSuffix (WoWSims randomSuffix negated)
  * .headless unequip <character> <slot|all>  destroy the equipped item in slot (0..18) or all
+ * .headless enchant <character> <slot> <enchantId|0> [perm|prismatic]   set the permanent (or belt-buckle prismatic) enchant of the equipped item
+ * .headless gem <character> <slot> <gemItemId> [gemItemId] [gemItemId]  socket gems (item ids) into the equipped item, in socket order
+ * .headless reforge <character> <slot> <itemReforgeId|0>   apply an ItemReforge.db2 row to the equipped item
+ * .headless talents <character> <string> reset talents and learn a WoWSims talent string ("003-230330221120121213231-03"),
+ *                                        set the primary tree (most points) and the class mastery passive
+ * .headless glyph <character> <index> <glyphPropertiesId|0>   put a glyph into glyph slot index (0..8), 0 removes
+ * .headless burst <character> <spell> <count>   cast <count> triggered (instant, free) casts on the selected target in one tick
  * .headless select none <character>      clear the selection
  * .headless unreward <character> <quest> forget a quest completely (active and rewarded), re-evaluate phases
  * .headless phaseupdate <character>      re-evaluate phase conditions and print current phases
@@ -27,6 +35,7 @@
 #include "AccountMgr.h"
 #include "CharacterPackets.h"
 #include "DatabaseEnv.h"
+#include "DB2Stores.h"
 #include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "PhasingHandler.h"
@@ -34,6 +43,8 @@
 #include "SpellMgr.h"
 #include "StringFormat.h"
 #include "StringConvert.h"
+#include "Util.h"
+#include <tuple>
 #include "RealmList.h"
 #include "BattlenetAccountMgr.h"
 #include "CharacterCache.h"
@@ -117,6 +128,12 @@ public:
             { "stats",  HandleHeadlessStats,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "equip",  HandleHeadlessEquip,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "unequip", HandleHeadlessUnequip, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "enchant", HandleHeadlessEnchant, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "gem",    HandleHeadlessGem,    rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "reforge", HandleHeadlessReforge, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "talents", HandleHeadlessTalents, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "glyph",  HandleHeadlessGlyph,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "burst",  HandleHeadlessBurst,  rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "unreward", HandleHeadlessUnreward, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "phaseupdate", HandleHeadlessPhaseUpdate, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "cast",   HandleHeadlessCast,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
@@ -464,6 +481,19 @@ public:
             if (Item* item = p->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
                 equip += Trinity::StringFormat("{}{}:{}", equip.empty() ? "" : " ", uint32(slot), item->GetTemplate()->GetId());
         handler->PSendSysMessage("  equipment %s", equip.empty() ? "(none)" : equip.c_str());
+        std::string items;
+        for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+            if (Item* item = p->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                items += Trinity::StringFormat("{}{}:{}:ench={}:gems={}/{}/{}:bonus={}:prismatic={}:reforge={}:random={}", items.empty() ? "" : " ", uint32(slot), item->GetEntry(),
+                    item->GetEnchantmentId(PERM_ENCHANTMENT_SLOT), item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT), item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT_2), item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT_3),
+                    item->GetEnchantmentId(BONUS_ENCHANTMENT_SLOT), item->GetEnchantmentId(PRISMATIC_ENCHANTMENT_SLOT), item->GetModifier(ITEM_MODIFIER_REFORGE), item->GetRandomPropertiesId());
+        handler->PSendSysMessage("  items %s", items.empty() ? "(none)" : items.c_str());
+        std::string glyphs;
+        for (uint32 i = 0; i < p->m_activePlayerData->Glyphs.size(); ++i)
+            glyphs += Trinity::StringFormat("{}{}", i ? "/" : "", uint32(p->m_activePlayerData->Glyphs[i]));
+        uint32 masterySpell = ClassMasterySpell(p->GetClass());
+        handler->PSendSysMessage("  talents primary %u points_left %d mastery_spell %u known %u can_use_mastery %u glyphs %s",
+            p->GetPrimaryTalentTree(), int32(p->m_activePlayerData->CharacterPoints), masterySpell, uint32(p->HasSpell(masterySpell)), uint32(p->CanUseMastery()), glyphs.c_str());
         return true;
     }
 
@@ -477,7 +507,7 @@ public:
         return true;
     }
 
-    static bool HandleHeadlessEquip(ChatHandler* handler, std::string name, uint32 itemId)
+    static bool HandleHeadlessEquip(ChatHandler* handler, std::string name, uint32 itemId, Optional<int32> randomPropertiesId)
     {
         Player* player = FindHeadlessPlayer(handler, name);
         if (!player)
@@ -498,7 +528,7 @@ public:
                 handler->SetSentErrorMessage(true);
                 return false;
             }
-            item = player->StoreNewItem(dest, itemId, true, GenerateItemRandomBonusListId(itemId));
+            item = player->StoreNewItem(dest, itemId, true, GenerateItemRandomBonusListId(itemId), randomPropertiesId.value_or(0));
             if (!item)
             {
                 handler->PSendSysMessage("Headless: StoreNewItem failed for %u.", itemId);
@@ -522,8 +552,326 @@ public:
         player->RemoveItem(item->GetBagSlot(), item->GetSlot(), true);
         Item* equipped = player->EquipItem(equipDest, item, true);
         player->AutoUnequipOffhandIfNeed();
-        handler->PSendSysMessage("Headless: '%s' equipped %u in slot %u -> %s.", name.c_str(), itemId, uint32(slot), equipped ? "ok" : "failed");
+        handler->PSendSysMessage("Headless: '%s' equipped %u in slot %u -> %s, randomProperties %d.", name.c_str(), itemId, uint32(slot), equipped ? "ok" : "failed", equipped ? equipped->GetRandomPropertiesId() : 0);
         return equipped != nullptr;
+    }
+
+    static Item* FindEquippedItem(ChatHandler* handler, Player* player, uint32 slot)
+    {
+        if (slot >= EQUIPMENT_SLOT_END)
+        {
+            handler->SendSysMessage("Headless: slot must be 0..18.");
+            handler->SetSentErrorMessage(true);
+            return nullptr;
+        }
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, uint8(slot));
+        if (!item)
+        {
+            handler->PSendSysMessage("Headless: nothing equipped in slot %u.", slot);
+            handler->SetSentErrorMessage(true);
+        }
+        return item;
+    }
+
+    // Same sequence as Spell::EffectEnchantItemPerm, without the spell. "prismatic" is the belt-buckle socket enchant.
+    static bool HandleHeadlessEnchant(ChatHandler* handler, std::string name, uint32 slot, uint32 enchantId, Optional<std::string> kind)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        Item* item = FindEquippedItem(handler, player, slot);
+        if (!item)
+            return false;
+        if (enchantId && !sSpellItemEnchantmentStore.LookupEntry(enchantId))
+        {
+            handler->PSendSysMessage("Headless: enchant %u does not exist.", enchantId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        EnchantmentSlot enchSlot = PERM_ENCHANTMENT_SLOT;
+        if (kind && *kind == "prismatic")
+            enchSlot = PRISMATIC_ENCHANTMENT_SLOT;
+        else if (kind && *kind != "perm")
+        {
+            handler->SendSysMessage("Headless: enchant kind must be perm or prismatic.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        player->ApplyEnchantment(item, enchSlot, false);
+        item->SetEnchantment(enchSlot, enchantId, 0, 0, player->GetGUID());
+        player->ApplyEnchantment(item, enchSlot, true);
+        handler->PSendSysMessage("Headless: '%s' slot %u item %u enchant[%u] = %u.", name.c_str(), slot, item->GetEntry(), uint32(enchSlot), item->GetEnchantmentId(enchSlot));
+        return true;
+    }
+
+    // Same sequence as WorldSession::HandleSocketGems, without the gem items in the bags and without the colour checks:
+    // the test decides what to socket, the sheet shows what came out. Gems are given in socket order; a belt-buckle
+    // (prismatic) socket is the first index without a colour and needs the prismatic enchant set first.
+    static bool HandleHeadlessGem(ChatHandler* handler, std::string name, uint32 slot, uint32 gem1, Optional<uint32> gem2, Optional<uint32> gem3)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        Item* item = FindEquippedItem(handler, player, slot);
+        if (!item)
+            return false;
+
+        std::array<uint32, MAX_GEM_SOCKETS> gems = { gem1, gem2.value_or(0), gem3.value_or(0) };
+        std::array<GemPropertiesEntry const*, MAX_GEM_SOCKETS> gemProperties = { };
+        std::array<ItemDynamicFieldGems, MAX_GEM_SOCKETS> gemData = { };
+        uint32 firstPrismatic = 0;
+        while (firstPrismatic < MAX_GEM_SOCKETS && item->GetSocketColor(firstPrismatic))
+            ++firstPrismatic;
+        for (uint32 i = 0; i < MAX_GEM_SOCKETS; ++i)
+        {
+            if (!gems[i])
+                continue;
+            ItemTemplate const* gemTemplate = sObjectMgr->GetItemTemplate(gems[i]);
+            if (!gemTemplate || !gemTemplate->GetGemProperties())
+            {
+                handler->PSendSysMessage("Headless: %u is not a gem.", gems[i]);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            gemProperties[i] = sGemPropertiesStore.LookupEntry(gemTemplate->GetGemProperties());
+            if (!gemProperties[i])
+            {
+                handler->PSendSysMessage("Headless: gem %u has no GemProperties row.", gems[i]);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            if (!item->GetSocketColor(i) && (i != firstPrismatic || !item->GetEnchantmentId(PRISMATIC_ENCHANTMENT_SLOT)))
+            {
+                handler->PSendSysMessage("Headless: item %u has no socket %u (set the prismatic enchant first for a belt buckle).", item->GetEntry(), i);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            gemData[i].ItemId = gems[i];
+            gemData[i].Context = 0;
+        }
+
+        bool socketBonusActivated = item->GemsFitSockets();
+        player->ToggleMetaGemsActive(uint8(slot), false);
+        player->_ApplyItemMods(item, uint8(slot), false);
+        for (uint16 i = 0; i < MAX_GEM_SOCKETS; ++i)
+        {
+            if (!gems[i])
+                continue;
+            item->SetGem(i, &gemData[i], player->GetLevel());
+            if (gemProperties[i]->EnchantID)
+                item->SetEnchantment(EnchantmentSlot(SOCK_ENCHANTMENT_SLOT + i), gemProperties[i]->EnchantID, 0, 0, player->GetGUID());
+        }
+        player->_ApplyItemMods(item, uint8(slot), true);
+        bool socketBonusToBeActivated = item->GemsFitSockets();
+        if (socketBonusActivated != socketBonusToBeActivated)
+        {
+            player->ApplyEnchantment(item, BONUS_ENCHANTMENT_SLOT, false);
+            item->SetEnchantment(BONUS_ENCHANTMENT_SLOT, socketBonusToBeActivated ? item->GetTemplate()->GetSocketBonus() : 0, 0, 0, player->GetGUID());
+            player->ApplyEnchantment(item, BONUS_ENCHANTMENT_SLOT, true);
+        }
+        player->ToggleMetaGemsActive(uint8(slot), true);
+        handler->PSendSysMessage("Headless: '%s' slot %u item %u gems %u/%u/%u socketBonus %u.", name.c_str(), slot, item->GetEntry(),
+            item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT), item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT_2), item->GetEnchantmentId(SOCK_ENCHANTMENT_SLOT_3), item->GetEnchantmentId(BONUS_ENCHANTMENT_SLOT));
+        return true;
+    }
+
+    // Same sequence as WorldSession::HandleReforgeItem, without the NPC and the fee.
+    static bool HandleHeadlessReforge(ChatHandler* handler, std::string name, uint32 slot, uint32 reforgeId)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        Item* item = FindEquippedItem(handler, player, slot);
+        if (!item)
+            return false;
+        if (reforgeId && !sItemReforgeStore.LookupEntry(reforgeId))
+        {
+            handler->PSendSysMessage("Headless: ItemReforge %u does not exist.", reforgeId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        player->ApplyReforgedStats(item, false);
+        item->SetReforgeId(reforgeId);
+        player->ApplyReforgedStats(item, true);
+        handler->PSendSysMessage("Headless: '%s' slot %u item %u reforge = %u.", name.c_str(), slot, item->GetEntry(), item->GetModifier(ITEM_MODIFIER_REFORGE));
+        return true;
+    }
+
+    // Class mastery passives (Player.cpp keeps the same table private to CanUseMastery).
+    static uint32 ClassMasterySpell(uint8 classId)
+    {
+        switch (classId)
+        {
+            case CLASS_WARRIOR: return 87500;
+            case CLASS_PALADIN: return 87494;
+            case CLASS_HUNTER: return 87493;
+            case CLASS_ROGUE: return 87496;
+            case CLASS_PRIEST: return 87495;
+            case CLASS_DEATH_KNIGHT: return 87492;
+            case CLASS_SHAMAN: return 87497;
+            case CLASS_MAGE: return 86467;
+            case CLASS_WARLOCK: return 87498;
+            case CLASS_DRUID: return 87491;
+            default: return 0;
+        }
+    }
+
+    // WoWSims talent string: one block per talent tab in TalentTab.OrderIndex order, one digit per talent in
+    // (TierID, ColumnIndex) order, digit = ranks taken. Goes through Player::LearnTalent so that the ranks are
+    // real talents (respec-able, counted against CharacterPoints), and through SetPrimaryTalentTree so that the
+    // tree's primary spells and the mastery spell arrive the way they do for a client.
+    static bool HandleHeadlessTalents(ChatHandler* handler, std::string name, std::string talentString)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+
+        std::vector<std::string_view> blocks = Trinity::Tokenize(talentString, '-', true);
+        struct TabPlan { TalentTabEntry const* Tab; std::vector<TalentEntry const*> Talents; std::string_view Digits; uint32 Points; };
+        std::vector<TabPlan> plan;
+        for (int32 tabIndex = 0; tabIndex < int32(blocks.size()); ++tabIndex)
+        {
+            TalentTabEntry const* tab = sDB2Manager.GetTalentTabByIndex(player->GetClass(), tabIndex);
+            if (!tab)
+            {
+                handler->PSendSysMessage("Headless: class %u has no talent tab with index %d.", uint32(player->GetClass()), tabIndex);
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            TabPlan& tp = plan.emplace_back();
+            tp.Tab = tab;
+            tp.Digits = blocks[tabIndex];
+            tp.Points = 0;
+            for (TalentEntry const* talent : sTalentStore)
+                if (talent->TabID == tab->ID)
+                    tp.Talents.push_back(talent);
+            std::sort(tp.Talents.begin(), tp.Talents.end(), [](TalentEntry const* a, TalentEntry const* b)
+            {
+                return std::tie(a->TierID, a->ColumnIndex) < std::tie(b->TierID, b->ColumnIndex);
+            });
+            if (tp.Digits.size() > tp.Talents.size())
+            {
+                handler->PSendSysMessage("Headless: tab %u (%s) has %u talents but the string block has %u digits.", tab->ID, tab->Name[handler->GetSessionDbcLocale()], uint32(tp.Talents.size()), uint32(tp.Digits.size()));
+                handler->SetSentErrorMessage(true);
+                return false;
+            }
+            for (char c : tp.Digits)
+            {
+                if (c < '0' || c > '9')
+                {
+                    handler->PSendSysMessage("Headless: talent string block %d is not all digits.", tabIndex);
+                    handler->SetSentErrorMessage(true);
+                    return false;
+                }
+                tp.Points += uint32(c - '0');
+            }
+        }
+
+        player->ResetTalents(true);
+
+        // primary tree: the tab with the most points (Cataclysm rule: 31 points there before any other tab)
+        TabPlan const* primary = nullptr;
+        for (TabPlan const& tp : plan)
+            if (tp.Points && (!primary || tp.Points > primary->Points))
+                primary = &tp;
+
+        uint32 masterySpell = ClassMasterySpell(player->GetClass());
+        if (masterySpell && !player->HasSpell(masterySpell))
+            player->LearnSpell(masterySpell, false);
+
+        if (primary)
+            player->SetPrimaryTalentTree(primary->Tab->ID);
+
+        uint32 learned = 0, failed = 0;
+        std::string failedList;
+        for (TabPlan const& tp : plan)
+        {
+            for (std::size_t i = 0; i < tp.Digits.size(); ++i)
+            {
+                uint32 ranks = uint32(tp.Digits[i] - '0');
+                if (!ranks)
+                    continue;
+                TalentEntry const* talent = tp.Talents[i];
+                if (player->LearnTalent(talent->ID, uint8(ranks - 1)))
+                    learned += ranks;
+                else
+                {
+                    ++failed;
+                    failedList += Trinity::StringFormat(" {}(tab {} #{} x{})", talent->ID, tp.Tab->ID, uint32(i), ranks);
+                }
+            }
+        }
+
+        handler->PSendSysMessage("Headless: '%s' talents: %u ranks learned, %u talents failed%s; primary tree %u, points left %d, mastery spell %u known %u, CanUseMastery %u.",
+            name.c_str(), learned, failed, failedList.c_str(), player->GetPrimaryTalentTree(), int32(player->m_activePlayerData->CharacterPoints),
+            masterySpell, uint32(player->HasSpell(masterySpell)), uint32(player->CanUseMastery()));
+        return failed == 0;
+    }
+
+    static bool HandleHeadlessGlyph(ChatHandler* handler, std::string name, uint32 index, uint32 glyphPropertiesId)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        if (index >= player->m_activePlayerData->Glyphs.size())
+        {
+            handler->PSendSysMessage("Headless: glyph index must be 0..%u.", uint32(player->m_activePlayerData->Glyphs.size() - 1));
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (glyphPropertiesId && !sGlyphPropertiesStore.LookupEntry(glyphPropertiesId))
+        {
+            handler->PSendSysMessage("Headless: GlyphProperties %u does not exist.", glyphPropertiesId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (player->m_activePlayerData->Glyphs[index])
+            player->RemoveGlyph(uint8(index));
+        if (glyphPropertiesId)
+            player->ApplyGlyph(uint8(index), glyphPropertiesId);
+        std::string glyphs;
+        for (uint32 i = 0; i < player->m_activePlayerData->Glyphs.size(); ++i)
+            glyphs += Trinity::StringFormat("{}{}", i ? "/" : "", uint32(player->m_activePlayerData->Glyphs[i]));
+        handler->PSendSysMessage("Headless: '%s' glyph[%u] = %u, glyphs %s.", name.c_str(), index, uint32(player->m_activePlayerData->Glyphs[index]), glyphs.c_str());
+        return true;
+    }
+
+    // Damage sampling without cast time, GCD or mana: N triggered casts in one world tick, procs allowed. The recorder sees
+    // cast_start/cast_go/spell_damage for each. Not for auras/DoTs (a re-cast refreshes the aura, it does not
+    // add ticks) and not a check of cast time or cost, that is what .headless cast is for.
+    static bool HandleHeadlessBurst(ChatHandler* handler, std::string name, uint32 spellId, uint32 count)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+        if (!sSpellMgr->GetSpellInfo(spellId, DIFFICULTY_NONE))
+        {
+            handler->PSendSysMessage("Headless: spell %u does not exist.", spellId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        if (!count || count > 1000)
+        {
+            handler->SendSysMessage("Headless: count must be 1..1000.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Unit* target = ObjectAccessor::GetUnit(*player, player->GetTarget());
+        if (!target)
+            target = player;
+        uint32 ok = 0;
+        SpellCastResult last = SPELL_CAST_OK;
+        for (uint32 i = 0; i < count; ++i)
+        {
+            SpellCastResult result = player->CastSpell(target, spellId, CastSpellExtraArgs(TriggerCastFlags(TRIGGERED_FULL_MASK & ~TRIGGERED_DISALLOW_PROC_EVENTS)));
+            if (result == SPELL_CAST_OK)
+                ++ok;
+            else
+                last = result;
+        }
+        handler->PSendSysMessage("Headless: '%s' burst %u x%u on %s -> %u ok, %u failed, last failure SpellCastResult %u.",
+            name.c_str(), spellId, count, target->GetName().c_str(), ok, count - ok, uint32(last));
+        return ok == count;
     }
 
     static bool HandleHeadlessUnequip(ChatHandler* handler, std::string name, std::string slotArg)
