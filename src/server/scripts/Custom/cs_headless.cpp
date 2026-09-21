@@ -11,6 +11,7 @@
  * .headless select entry <character> <entry>     set the character's target to the nearest creature with this entry
  * .headless attack <character>           start melee attacking the current target
  * .headless loot <character>             list the loot the character sees on its selected creature
+ * .headless unreward <character> <quest> forget a rewarded quest (quest history cleanup for phase tests)
  * .headless stop <character>             stop attacking
  *
  * One headless character per game account: World::AddSession replaces an existing session of the same account.
@@ -99,6 +100,7 @@ public:
             { "select", selectCommandTable },
             { "attack", HandleHeadlessAttack, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "loot",   HandleHeadlessLoot,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "unreward", HandleHeadlessUnreward, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "stop",   HandleHeadlessStop,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
         };
         static ChatCommandTable commandTable =
@@ -173,14 +175,15 @@ public:
             stmt->setUInt32(2, sRealmList->GetCurrentRealmId().Realm);
             loginTransaction->Append(stmt);
 
-            CharacterDatabase.DirectCommitTransaction(characterTransaction);
-            LoginDatabase.DirectCommitTransaction(loginTransaction);
+            // prepared statements of the character save are CONNECTION_ASYNC: commit through the async worker like HandleCharCreateCallback does
+            CharacterDatabase.CommitTransaction(characterTransaction);
+            LoginDatabase.CommitTransaction(loginTransaction);
 
             guid = newChar->GetGUID();
             sCharacterCache->AddCharacterCacheEntry(guid, accountId, newChar->GetName(), newChar->GetNativeGender(), newChar->GetRace(), newChar->GetClass(), newChar->GetLevel(), false);
         }
 
-        handler->PSendSysMessage("Headless: created '%s' (%s) on account %u, race %u class %u.", charName.c_str(), guid.ToString().c_str(), accountId, uint32(race), uint32(playerClass));
+        handler->PSendSysMessage("Headless: created '%s' (%s) on account %u, race %u class %u. Save is queued, wait a few seconds before login.", charName.c_str(), guid.ToString().c_str(), accountId, uint32(race), uint32(playerClass));
         return true;
     }
 
@@ -357,6 +360,26 @@ public:
         handler->PSendSysMessage("Headless: loot of %s (%u) for '%s': gold %u, items %u", creature->GetName().c_str(), creature->GetEntry(), name.c_str(), loot->gold, uint32(loot->items.size()));
         for (LootItem const& item : loot->items)
             handler->PSendSysMessage("  item %u x%u%s", item.itemid, uint32(item.count), item.is_looted ? " (looted)" : "");
+        return true;
+    }
+
+    static bool HandleHeadlessUnreward(ChatHandler* handler, std::string name, uint32 questId)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+
+        if (!sObjectMgr->GetQuestTemplate(questId))
+        {
+            handler->PSendSysMessage("Headless: quest %u does not exist.", questId);
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        bool wasRewarded = player->IsQuestRewarded(questId);
+        player->RemoveRewardedQuest(questId);
+        player->RemoveActiveQuest(questId);
+        player->SaveToDB();
+        handler->PSendSysMessage("Headless: quest %u forgotten for '%s' (was rewarded: %u).", questId, name.c_str(), uint32(wasRewarded));
         return true;
     }
 
