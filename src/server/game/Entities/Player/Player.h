@@ -2372,6 +2372,7 @@ class TC_GAME_API Player final : public Unit, public GridObject<Player>
         void _ApplyWeaponDamage(uint8 slot, Item* item, ScalingStatValuesEntry const* ssv, bool apply);
         bool EnchantmentFitsRequirements(uint32 enchantmentcondition, int8 slot) const;
         void ToggleMetaGemsActive(uint8 exceptslot, bool apply);
+        std::set<std::pair<ObjectGuid, uint8>> _toggledMetaGems;   // meta gems switched off by ToggleMetaGemsActive(false), re-applied by (true)
         void CorrectMetaGemEnchants(uint8 slot, bool apply);
         void InitDataForForm(bool reapplyMods = false);
 

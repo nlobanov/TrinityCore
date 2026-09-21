@@ -48,71 +48,116 @@ std::string EventRecorder::Ref(WorldObject const* object)
     return Trinity::StringFormat("{{\"guid\":\"{}\",\"entry\":{}}}", object->GetGUID().ToString(), object->GetEntry());
 }
 
-bool EventRecorder::Start(std::string const& name, int32 mapFilter)
+bool EventRecorder::Recording::Accepts(Map const* map) const
+{
+    if (MapFilter < 0)
+        return true;
+    if (!map || int32(map->GetId()) != MapFilter)
+        return false;
+    return InstanceFilter < 0 || int32(map->GetInstanceId()) == InstanceFilter;
+}
+
+bool EventRecorder::Start(std::string const& name, int32 mapFilter, int32 instanceFilter /*= -1*/)
 {
     std::lock_guard<std::mutex> guard(_lock);
-    if (_file.is_open())
-        _file.close();
+    for (auto itr = _recordings.begin(); itr != _recordings.end(); ++itr)
+        if ((*itr)->Name == name)
+        {
+            (*itr)->File.close();
+            _recordings.erase(itr);
+            break;
+        }
     std::string path = sLog->GetLogsDir() + "recorder-" + name + ".jsonl";
-    _file.open(path, std::ios::out | std::ios::trunc);
-    if (!_file.is_open())
+    auto rec = std::make_unique<Recording>();
+    rec->File.open(path, std::ios::out | std::ios::trunc);
+    if (!rec->File.is_open())
     {
         TC_LOG_ERROR("misc", "EventRecorder: cannot open {}", path);
         return false;
     }
-    _name = name;
-    _mapFilter = mapFilter;
-    _startMs = GameTime::GetGameTimeMS();
-    _count = 0;
-    _lastSample.clear();
+    rec->Name = name;
+    rec->MapFilter = mapFilter;
+    rec->InstanceFilter = instanceFilter;
+    rec->StartMs = GameTime::GetGameTimeMS();
+    _recordings.push_back(std::move(rec));
     _enabled.store(true, std::memory_order_relaxed);
-    TC_LOG_INFO("misc", "EventRecorder: started '{}' -> {} (map filter {})", name, path, mapFilter);
+    TC_LOG_INFO("misc", "EventRecorder: started '{}' -> {} (map filter {}, instance filter {})", name, path, mapFilter, instanceFilter);
     return true;
 }
 
-void EventRecorder::Stop()
+bool EventRecorder::Stop(std::string const& name)
 {
-    _enabled.store(false, std::memory_order_relaxed);
     std::lock_guard<std::mutex> guard(_lock);
-    if (_file.is_open())
+    bool found = false;
+    for (auto itr = _recordings.begin(); itr != _recordings.end();)
     {
-        _file.flush();
-        _file.close();
+        if (name.empty() || (*itr)->Name == name)
+        {
+            (*itr)->File.flush();
+            (*itr)->File.close();
+            TC_LOG_INFO("misc", "EventRecorder: stopped '{}' after {} events", (*itr)->Name, (*itr)->Count);
+            itr = _recordings.erase(itr);
+            found = true;
+        }
+        else
+            ++itr;
     }
-    TC_LOG_INFO("misc", "EventRecorder: stopped '{}' after {} events", _name, _count);
+    if (_recordings.empty())
+    {
+        _enabled.store(false, std::memory_order_relaxed);
+        _lastSample.clear();
+    }
+    return found;
 }
 
 std::string EventRecorder::Status() const
 {
     std::lock_guard<std::mutex> guard(_lock);
-    if (!_enabled.load(std::memory_order_relaxed))
+    if (_recordings.empty())
         return "recorder: stopped";
-    return Trinity::StringFormat("recorder: '{}' running, map filter {}, {} events, {} ms", _name, _mapFilter, _count, GameTime::GetGameTimeMS() - _startMs);
+    std::string out;
+    for (auto const& rec : _recordings)
+        out += Trinity::StringFormat("recorder: '{}' running, map filter {}, instance filter {}, {} events, {} ms\n", rec->Name, rec->MapFilter, rec->InstanceFilter, rec->Count, GameTime::GetGameTimeMS() - rec->StartMs);
+    return out;
 }
 
-void EventRecorder::Write(Map const* map, char const* event, std::string const& actor, std::string const& fields)
+void EventRecorder::Write(Map const* map, char const* event, std::string const& actor, std::string const& fields, std::string const& only /*= ""*/)
 {
     std::lock_guard<std::mutex> guard(_lock);
-    if (!_file.is_open())
-        return;
-    _file << "{\"t\":" << (GameTime::GetGameTimeMS() - _startMs)
-          << ",\"map\":" << (map ? int64(map->GetId()) : -1)
-          << ",\"inst\":" << (map ? map->GetInstanceId() : 0)
-          << ",\"ev\":\"" << event << "\",\"actor\":" << actor;
-    if (!fields.empty())
-        _file << ',' << fields;
-    _file << "}\n";
-    ++_count;
-    _file.flush();                                          // every event: the record must survive a crash right after it
+    for (auto const& rec : _recordings)
+    {
+        if (!rec->File.is_open() || (only.empty() ? !rec->Accepts(map) : rec->Name != only))
+            continue;
+        rec->File << "{\"t\":" << (GameTime::GetGameTimeMS() - rec->StartMs)
+                  << ",\"map\":" << (map ? int64(map->GetId()) : -1)
+                  << ",\"inst\":" << (map ? map->GetInstanceId() : 0)
+                  << ",\"ev\":\"" << event << "\",\"actor\":" << actor;
+        if (!fields.empty())
+            rec->File << ',' << fields;
+        rec->File << "}\n";
+        ++rec->Count;
+        rec->File.flush();                                  // every event: the record must survive a crash right after it
+    }
 }
 
-void EventRecorder::Mark(std::string const& text)
+void EventRecorder::Mark(std::string const& text, std::string const& name /*= ""*/)
 {
     if (!IsEnabled())
         return;
-    Write(nullptr, "mark", "null", "\"text\":\"" + Esc(text) + "\"");
-    std::lock_guard<std::mutex> guard(_lock);
-    _file.flush();
+    if (name.empty())
+    {
+        // a mark goes to every recording regardless of its map filter
+        std::lock_guard<std::mutex> guard(_lock);
+        for (auto const& rec : _recordings)
+            if (rec->File.is_open())
+            {
+                rec->File << "{\"t\":" << (GameTime::GetGameTimeMS() - rec->StartMs) << ",\"map\":-1,\"inst\":0,\"ev\":\"mark\",\"actor\":null,\"text\":\"" << Esc(text) << "\"}\n";
+                ++rec->Count;
+                rec->File.flush();
+            }
+        return;
+    }
+    Write(nullptr, "mark", "null", "\"text\":\"" + Esc(text) + "\"", name);
 }
 
 void EventRecorder::Emit(WorldObject const* actor, char const* event, std::string const& fields)
@@ -120,16 +165,12 @@ void EventRecorder::Emit(WorldObject const* actor, char const* event, std::strin
     if (!IsEnabled())
         return;
     Map const* map = actor ? actor->FindMap() : nullptr;
-    if (_mapFilter >= 0 && (!map || int32(map->GetId()) != _mapFilter))
-        return;
     Write(map, event, Actor(actor), fields);
 }
 
 void EventRecorder::EmitOnMap(Map const* map, char const* event, std::string const& fields)
 {
     if (!IsEnabled())
-        return;
-    if (_mapFilter >= 0 && (!map || int32(map->GetId()) != _mapFilter))
         return;
     Write(map, event, "null", fields);
 }
@@ -139,8 +180,6 @@ void EventRecorder::SamplePosition(WorldObject const* actor)
     if (!IsEnabled() || !actor)
         return;
     Map const* map = actor->FindMap();
-    if (_mapFilter >= 0 && (!map || int32(map->GetId()) != _mapFilter))
-        return;
     uint32 now = GameTime::GetGameTimeMS();
     {
         std::lock_guard<std::mutex> guard(_lock);

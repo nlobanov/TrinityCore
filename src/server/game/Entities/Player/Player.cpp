@@ -22740,10 +22740,28 @@ void Player::ToggleMetaGemsActive(uint8 exceptslot, bool apply)
 
             //only metagems to be (de)activated, so only enchants with condition
             uint32 condition = enchantEntry->ConditionID;
-            if (condition)
-                ApplyEnchantment(pItem, EnchantmentSlot(enchant_slot), apply);
+            if (!condition)
+                continue;
+
+            // Only re-apply what this function switched off. Between the off and the on call Player::_ApplyItemMods runs
+            // CorrectMetaGemEnchants, which already applies a meta gem whose condition became true through the gems just
+            // socketed; applying it here a second time doubled the meta gem stats until the next relog (measured: +54 Int
+            // from Burning Shadowspirit Diamond after socketing the last red gem).
+            std::pair<ObjectGuid, uint8> key(pItem->GetGUID(), uint8(enchant_slot));
+            if (!apply)
+            {
+                if (EnchantmentFitsRequirements(condition, -1))
+                {
+                    ApplyEnchantment(pItem, EnchantmentSlot(enchant_slot), false);
+                    _toggledMetaGems.insert(key);
+                }
+            }
+            else if (_toggledMetaGems.erase(key))
+                ApplyEnchantment(pItem, EnchantmentSlot(enchant_slot), true);
         }
     }
+    if (apply)
+        _toggledMetaGems.clear();
 }
 
 void Player::SetBattlegroundEntryPoint()

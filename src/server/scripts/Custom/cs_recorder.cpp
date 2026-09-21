@@ -28,9 +28,10 @@ public:
         return commandTable;
     }
 
-    static bool HandleRecorderStart(ChatHandler* handler, std::string name, Optional<int32> mapId)
+    // .recorder start <name> [mapId] [instanceId]: several recordings may run at once, one file each
+    static bool HandleRecorderStart(ChatHandler* handler, std::string name, Optional<int32> mapId, Optional<int32> instanceId)
     {
-        if (!sEventRecorder->Start(name, mapId.value_or(-1)))
+        if (!sEventRecorder->Start(name, mapId.value_or(-1), instanceId.value_or(-1)))
         {
             handler->SendSysMessage("recorder: failed to open output file, see Server.log");
             handler->SetSentErrorMessage(true);
@@ -40,10 +41,11 @@ public:
         return true;
     }
 
-    static bool HandleRecorderStop(ChatHandler* handler)
+    // .recorder stop [name]: without a name every recording stops
+    static bool HandleRecorderStop(ChatHandler* handler, Optional<std::string> name)
     {
-        sEventRecorder->Stop();
-        handler->SendSysMessage("recorder: stopped");
+        bool found = sEventRecorder->Stop(name.value_or(""));
+        handler->PSendSysMessage("recorder: %s", found ? "stopped" : "nothing to stop");
         return true;
     }
 
@@ -53,6 +55,7 @@ public:
         return true;
     }
 
+    // .recorder mark <text>: written to every running recording
     static bool HandleRecorderMark(ChatHandler* handler, Tail text)
     {
         sEventRecorder->Mark(std::string(text));

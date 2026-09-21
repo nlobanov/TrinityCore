@@ -824,6 +824,10 @@ void Map::Update(uint32 t_diff)
 
     sScriptMgr->OnMapUpdate(this, t_diff);
 
+    TC_METRIC_VALUE("map_players", uint64(m_mapRefManager.size()),
+        TC_METRIC_TAG("map_id", std::to_string(GetId())),
+        TC_METRIC_TAG("map_instanceid", std::to_string(GetInstanceId())));
+
     TC_METRIC_VALUE("map_creatures", uint64(GetObjectsStore().Size<Creature>()),
         TC_METRIC_TAG("map_id", std::to_string(GetId())),
         TC_METRIC_TAG("map_instanceid", std::to_string(GetInstanceId())));
