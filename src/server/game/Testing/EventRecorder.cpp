@@ -102,8 +102,8 @@ void EventRecorder::Write(Map const* map, char const* event, std::string const& 
     if (!fields.empty())
         _file << ',' << fields;
     _file << "}\n";
-    if ((++_count & 0xFF) == 0)
-        _file.flush();
+    ++_count;
+    _file.flush();                                          // every event: the record must survive a crash right after it
 }
 
 void EventRecorder::Mark(std::string const& text)

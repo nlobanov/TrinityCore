@@ -10,6 +10,7 @@
  * .headless select spawn <character> <spawnId>   set the character's target to a creature by DB spawn id
  * .headless select entry <character> <entry>     set the character's target to the nearest creature with this entry
  * .headless attack <character>           start melee attacking the current target
+ * .headless loot <character>             list the loot the character sees on its selected creature
  * .headless stop <character>             stop attacking
  *
  * One headless character per game account: World::AddSession replaces an existing session of the same account.
@@ -27,6 +28,7 @@
 #include "Chat.h"
 #include "ChatCommand.h"
 #include "Creature.h"
+#include "Loot.h"
 #include "Map.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -96,6 +98,7 @@ public:
             { "exec",   HandleHeadlessExec,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "select", selectCommandTable },
             { "attack", HandleHeadlessAttack, rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
+            { "loot",   HandleHeadlessLoot,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
             { "stop",   HandleHeadlessStop,   rbac::RBAC_PERM_COMMAND_DEBUG, Console::Yes },
         };
         static ChatCommandTable commandTable =
@@ -330,6 +333,31 @@ public:
         bool started = player->Attack(target, true);
         handler->PSendSysMessage("Headless: '%s' attack %s -> %s.", name.c_str(), target->GetName().c_str(), started ? "started" : "not started");
         return started;
+    }
+
+    static bool HandleHeadlessLoot(ChatHandler* handler, std::string name)
+    {
+        Player* player = FindHeadlessPlayer(handler, name);
+        if (!player)
+            return false;
+
+        Creature* creature = ObjectAccessor::GetCreature(*player, player->GetTarget());
+        if (!creature)
+        {
+            handler->SendSysMessage("Headless: no creature selected.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+        Loot* loot = creature->GetLootForPlayer(player);
+        if (!loot)
+        {
+            handler->PSendSysMessage("Headless: %s (%u) has no loot for '%s' (alive: %u).", creature->GetName().c_str(), creature->GetEntry(), name.c_str(), uint32(creature->IsAlive()));
+            return true;
+        }
+        handler->PSendSysMessage("Headless: loot of %s (%u) for '%s': gold %u, items %u", creature->GetName().c_str(), creature->GetEntry(), name.c_str(), loot->gold, uint32(loot->items.size()));
+        for (LootItem const& item : loot->items)
+            handler->PSendSysMessage("  item %u x%u%s", item.itemid, uint32(item.count), item.is_looted ? " (looted)" : "");
+        return true;
     }
 
     static bool HandleHeadlessStop(ChatHandler* handler, std::string name)
