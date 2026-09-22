@@ -42,7 +42,16 @@ enum BRCCreatureIds
 {
     NPC_TWILIGHT_FLAME_CALLER           = 39708,
     NPC_RAZ_THE_CRAZED                  = 39670,
-    NPC_ROMOGG_BONECRUSHER              = 39665
+    NPC_ROMOGG_BONECRUSHER              = 39665,
+
+    // Rom'ogg Bonecrusher
+    NPC_QUAKE                           = 40401,
+    NPC_CHAINS_OF_WOE                   = 40447,
+    NPC_ANGERED_EARTH                   = 50376,
+
+    // Corla, Herald of Twilight
+    NPC_TWILIGHT_ZEALOT                 = 50284,
+    NPC_EVOLVED_TWILIGHT_ZEALOT         = 39987
 };
 
 template <class AI, class T>
@@ -50,5 +59,7 @@ inline AI* GetBlackrockCavernsAI(T* obj)
 {
     return GetInstanceAI<AI>(obj, BCScriptName);
 }
+
+#define RegisterBlackrockCavernsCreatureAI(ai_name) RegisterCreatureAIWithFactory(ai_name, GetBlackrockCavernsAI)
 
 #endif // BLACKROCKCAVERNS_H_
