@@ -23736,7 +23736,14 @@ void Player::LearnDefaultSkills()
     {
         SkillRaceClassInfoEntry const* rcInfo = *itr;
         if (HasSkill(rcInfo->SkillID))
+        {
+            // Player::ResetSpells removes every spell but leaves the skills, so the automatic spells of a known skill
+            // (SkillLineAbility AcquireMethod AutomaticSkillRank / AutomaticCharLevel - among them the hidden caster
+            // passives 85801, 76276, 76298) would stay lost until the next level up. Re-learn them without touching
+            // the skill value, exactly as Player::UpdateSkillsForLevel does.
+            LearnSkillRewardedSpells(rcInfo->SkillID, GetPureSkillValue(rcInfo->SkillID), Races(GetRace()));
             continue;
+        }
 
         if (rcInfo->MinLevel > GetLevel())
             continue;
