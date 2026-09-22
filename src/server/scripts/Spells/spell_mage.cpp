@@ -113,11 +113,36 @@ namespace Scripts::Spells::Mage
             AfterEffectRemove += AuraEffectApplyFn(spell_mage_arcane_missiles::AfterRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
         }
     };
+
+    // 44457 - Living Bomb: the explosion (EFFECT_1 dummy value, 44461) fires when the aura runs out, not when it is dispelled or the target dies.
+    // Ported from TrinityCore 4.3.4 (Firelands-Core snapshot, GPL-2.0); TDB 442 has no spell_script_names row for it (wow-data sql/custom/0007).
+    class spell_mage_living_bomb : public AuraScript
+    {
+        bool Validate(SpellInfo const* spellInfo) override
+        {
+            return ValidateSpellInfo({ uint32(spellInfo->GetEffect(EFFECT_1).CalcValue()) });
+        }
+
+        void AfterRemove(AuraEffect const* aurEff, AuraEffectHandleModes /*mode*/)
+        {
+            if (GetTargetApplication()->GetRemoveMode() != AURA_REMOVE_BY_EXPIRE)
+                return;
+
+            if (Unit* caster = GetCaster())
+                caster->CastSpell(GetTarget(), uint32(aurEff->GetAmount()), aurEff);
+        }
+
+        void Register() override
+        {
+            AfterEffectRemove += AuraEffectRemoveFn(spell_mage_living_bomb::AfterRemove, EFFECT_1, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        }
+    };
 }
 
 void AddSC_mage_spell_scripts()
 {
     using namespace Scripts::Spells::Mage;
+    RegisterSpellScript(spell_mage_living_bomb);
     RegisterSpellScript(spell_mage_deep_freeze_immunity_state);
     RegisterSpellScript(spell_mage_offensive_state_dnd);
     RegisterSpellScript(spell_mage_arcane_missiles);

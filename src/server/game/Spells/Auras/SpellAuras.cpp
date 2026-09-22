@@ -529,10 +529,11 @@ bool Aura::CanPeriodicTickCrit() const
     if (GetSpellInfo()->HasAttribute(SPELL_ATTR2_CANT_CRIT))
         return false;
 
-    if (GetSpellInfo()->HasAttribute(SPELL_ATTR8_PERIODIC_CAN_CRIT))
-        return true;
-
-    return false;
+    // Cataclysm (4.0.1): every periodic damage and healing effect can critically strike unless the spell forbids crits.
+    // The retail-era SPELL_ATTR8_PERIODIC_CAN_CRIT whitelist is only partially set in 4.4.2 client data (Shadow Word: Pain
+    // and Corruption carry it, Pyroblast, Living Bomb, Moonfire and Garrote do not), so it cannot be the rule here.
+    // Measured before this change: 0 crits in 20 Living Bomb ticks at 14.4% spell crit (wow-data comms/to-L/013.md).
+    return true;
 }
 
 Aura::~Aura()
